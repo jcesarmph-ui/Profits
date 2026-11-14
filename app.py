@@ -1,13 +1,18 @@
 """Interface desktop da carteira."""
 
 from pathlib import Path
+import json
+import math
 import sqlite3
+import sys
 
 from PySide6.QtCharts import (
-    QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QValueAxis,
+    QBarCategoryAxis, QBarSet, QCategoryAxis, QChart, QChartView, QLineSeries,
+    QPieSeries, QStackedBarSeries, QValueAxis,
 )
-from PySide6.QtCore import QDate, QLocale, Qt
-from PySide6.QtGui import QColor, QCursor, QPainter
+from PySide6.QtCore import QDate, QDateTime, QLocale, QStandardPaths, Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QCursor, QIcon, QPainter
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView,
@@ -23,6 +28,7 @@ PASTA = Path(__file__).resolve().parent
 AMBAR = "#e2ad67"
 CORES = ("#7ebdd2", "#a4afe7", "#e59391", "#83b9aa", "#c09bcd")
 CLASSE_COR = dict(zip(CLASSES, CORES))
+CLASSES_COM_METAS = ("FIIs", "Ações", "ETFs")
 TEMA = """
 QWidget { background:#181a2a; color:#eef2fa; font-family:'Segoe UI'; font-size:14px; }
 QLabel[tipo="titulo"] {font-size:27px; font-weight:700;}
@@ -40,6 +46,13 @@ QTabBar::tab {background:#202338; padding:12px 18px; border-bottom:2px solid #20
 QTabBar::tab:selected {background:#2d314a; border-bottom:2px solid #e2ad67;}
 QTabWidget::pane {border:0;}
 QScrollArea {border:0;}
+QScrollBar:vertical {width:10px; background:#202338; margin:2px;}
+QScrollBar:horizontal {height:10px; background:#202338; margin:2px;}
+QScrollBar::handle {background:#626987; border-radius:3px; min-height:28px; min-width:28px;}
+QScrollBar::handle:hover {background:#9299b9;}
+QScrollBar::add-line, QScrollBar::sub-line {width:0; height:0;}
+QScrollBar::add-page, QScrollBar::sub-page {background:transparent;}
+QPushButton[tipo="compacto"] {padding:3px 8px;}
 QToolTip {background:#24273c; color:#f1f0f7; border:1px solid #494f69; padding:7px;}
 
 QTableWidget {background:#171d26; alternate-background-color:#1e2632; border:0; gridline-color:#383c56;}
@@ -72,7 +85,7 @@ def botao(texto, acao, principal=False):
     return item
 
 
-def tabela(colunas, linhas):
+def tabela(colunas, linhas, compacta=False):
     grade = QTableWidget(len(linhas), len(colunas))
     grade.setHorizontalHeaderLabels(colunas)
     grade.verticalHeader().hide()
@@ -80,10 +93,17 @@ def tabela(colunas, linhas):
     grade.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     grade.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
     grade.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-    grade.horizontalHeader().setStretchLastSection(True)
+    grade.horizontalHeader().setStretchLastSection(not compacta)
     for i, linha in enumerate(linhas):
         for j, valor in enumerate(linha):
-            grade.setItem(i, j, QTableWidgetItem(str(valor)))
+            item = QTableWidgetItem(str(valor))
+            if compacta and j:
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            grade.setItem(i, j, item)
+    if compacta:
+        grade.verticalHeader().setDefaultSectionSize(30)
+        altura = grade.horizontalHeader().sizeHint().height()
+        grade.setFixedHeight(altura + 30 * max(1, min(8, len(linhas))) + 13)
     return grade
 
 
@@ -107,6 +127,8 @@ def grafico(titulo):
     item.setTheme(QChart.ChartTheme.ChartThemeDark)
     item.setBackgroundBrush(QColor("#24273c"))
     item.setTitle(titulo)
+    item.setLocale(QLocale("pt_BR"))
+    item.setLocalizeNumbers(True)
     item.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
     vista = QChartView(item)
     vista.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -189,34 +211,83 @@ def mostrar_barra(dentro, indice, dados, simbolo):
         QToolTip.hideText()
 
 
+def eixo_valores(chart, valores, simbolo="R$"):
+    eixo = QValueAxis()
+    eixo.setTitleText(simbolo)
+    minimo = min(0, min(valores) * 1.12)
+    maximo = max(1, max(valores) * 1.12) if minimo == 0 else max(0, max(valores) * 1.12)
+    eixo.setRange(minimo, maximo)
+    eixo.applyNiceNumbers()
+    intervalo = (eixo.max() - eixo.min()) / max(1, eixo.tickCount() - 1)
+    eixo.setLabelFormat("%.2f" if intervalo < 1 else "%.0f")
+    chart.addAxis(eixo, Qt.AlignmentFlag.AlignLeft)
+    return eixo
+
+
+def grafico_linhas(titulo, meses, linhas):
+    chart, vista = grafico(titulo)
+    chart.legend().setVisible(len(linhas) > 1)
+    valores = [valor for _, _, dados in linhas for valor in dados if valor is not None]
+    if not valores:
+        chart.setTitle(f"{titulo} · Sem fechamentos")
+        chart.legend().hide()
+        return vista
+    datas = QCategoryAxis()
+    datas.setLabelsPosition(QCategoryAxis.AxisLabelsPosition.AxisLabelsPositionOnValue)
+    datas.setStartValue(-1)
+    passo = max(1, math.ceil(len(meses) / 8))
+    for i in range(len(meses)):
+        if (len(meses) - 1 - i) % passo == 0:
+            datas.append(f"{meses[i][5:]}/{meses[i][2:4]}", i)
+    datas.setRange(-0.55, len(meses) - 0.45)
+    chart.addAxis(datas, Qt.AlignmentFlag.AlignBottom)
+    reais = eixo_valores(chart, valores)
+    for nome, cor, dados in linhas:
+        serie = QLineSeries()
+        serie.setName(nome)
+        serie.setColor(QColor(cor))
+        serie.setPointsVisible(True)
+        for i, valor in enumerate(dados):
+            if valor is not None:
+                serie.append(i, valor)
+        serie.hovered.connect(lambda ponto, dentro, nome=nome: QToolTip.showText(
+            QCursor.pos(), f"{nome} · {moeda(ponto.y())}"
+        ) if dentro else QToolTip.hideText())
+        chart.addSeries(serie)
+        serie.attachAxis(datas)
+        serie.attachAxis(reais)
+    return vista
+
+
 def grafico_barras(titulo, dados, cor, simbolo="R$"):
     chart, vista = grafico(titulo)
-    vista.setMinimumHeight(218)
+    vista.setMinimumHeight(285)
     chart.legend().hide()
     valores = [valor for _, valor in dados if valor is not None]
     if not valores:
         chart.setTitle(f"{titulo} · Sem dados")
         return vista
     if any(valor is None for _, valor in dados):
-        chart.setTitle(f"{titulo} · * Sem fechamento")
-    barras = QBarSet(titulo)
-    barras.setColor(QColor(cor))
-    barras.append([valor if valor is not None else 0 for _, valor in dados])
-    barras.hovered.connect(lambda dentro, i: mostrar_barra(dentro, i, dados, simbolo))
-    serie = QBarSeries()
-    serie.append(barras)
+        chart.setTitle(f"{titulo}  ·  * mês sem fechamento")
+    positivas = QBarSet(titulo)
+    positivas.setColor(QColor(cor))
+    positivas.append([max(0, valor or 0) for _, valor in dados])
+    positivas.hovered.connect(lambda dentro, i: mostrar_barra(dentro, i, dados, simbolo))
+    serie = QStackedBarSeries()
+    serie.append(positivas)
+    if min(valores) < 0:
+        negativas = QBarSet("Negativo")
+        negativas.setColor(QColor("#ed8f99"))
+        negativas.append([min(0, valor or 0) for _, valor in dados])
+        negativas.hovered.connect(lambda dentro, i: mostrar_barra(dentro, i, dados, simbolo))
+        serie.append(negativas)
+    serie.setBarWidth(0.72)
     chart.addSeries(serie)
     meses = QBarCategoryAxis()
     meses.append([f"{mes[5:]}/{mes[2:4]}{'*' if valor is None else ''}" for mes, valor in dados])
     chart.addAxis(meses, Qt.AlignmentFlag.AlignBottom)
     serie.attachAxis(meses)
-    eixo = QValueAxis()
-    eixo.setLabelFormat(f"{simbolo} %.0f")
-    minimo = min(0, min(valores) * 1.12)
-    maximo = max(0, max(valores) * 1.12)
-    eixo.setRange(minimo, maximo if minimo != maximo else 1)
-    chart.addAxis(eixo, Qt.AlignmentFlag.AlignLeft)
-    serie.attachAxis(eixo)
+    serie.attachAxis(eixo_valores(chart, valores, simbolo))
     return vista
 
 
@@ -224,6 +295,10 @@ class Janela(QMainWindow):
     def __init__(self, banco):
         super().__init__()
         self.banco = banco
+        self.rede = QNetworkAccessManager(self)
+        self.cotacoes_ao_vivo = {}
+        self.paineis_cotacao = {}
+        self.falha_cotacao = False
         self.setWindowTitle("Profits")
         self.resize(1250, 790)
         raiz = QWidget()
@@ -239,6 +314,59 @@ class Janela(QMainWindow):
         layout.addWidget(self.abas)
         self.setCentralWidget(raiz)
         self.atualizar()
+        self.timer_cotacoes = QTimer(self)
+        self.timer_cotacoes.timeout.connect(self.buscar_cotacoes)
+        self.timer_cotacoes.start(30_000)
+        QTimer.singleShot(0, self.buscar_cotacoes)
+
+    def buscar_cotacoes(self):
+        url = "https://economia.awesomeapi.com.br/json/last/USD-BRL,BTC-BRL"
+        pedido = QNetworkRequest(QUrl(url))
+        pedido.setTransferTimeout(8_000)
+        resposta = self.rede.get(pedido)
+        resposta.finished.connect(lambda: self.receber_cotacoes(resposta))
+
+    def receber_cotacoes(self, resposta):
+        try:
+            dados = json.loads(bytes(resposta.readAll()))
+            cotacoes = {}
+            for par in ("USDBRL", "BTCBRL"):
+                preco = float(dados[par]["bid"])
+                if not math.isfinite(preco) or preco <= 0:
+                    raise ValueError("Cotação inválida")
+                data = QDateTime.fromSecsSinceEpoch(int(dados[par]["timestamp"]))
+                cotacoes[par] = (preco, data.toString("dd/MM · HH:mm"))
+            self.cotacoes_ao_vivo = cotacoes
+            self.falha_cotacao = False
+        except (ValueError, KeyError, TypeError, OverflowError):
+            self.falha_cotacao = True
+        finally:
+            resposta.deleteLater()
+        self.exibir_cotacoes()
+
+    def exibir_cotacoes(self):
+        for par, (valor, detalhe) in self.paineis_cotacao.items():
+            if par in self.cotacoes_ao_vivo:
+                preco, data = self.cotacoes_ao_vivo[par]
+                valor.setText(moeda(preco))
+                status = " · Falha ao atualizar" if self.falha_cotacao else ""
+                detalhe.setText(f"AwesomeAPI · {data}{status}")
+            else:
+                detalhe.setText("Cotação indisponível" if self.falha_cotacao else "Consultando cotação…")
+
+    def painel_cotacao(self, par, titulo):
+        cartao = QWidget(objectName="cartao")
+        caixa = QHBoxLayout(cartao)
+        caixa.setContentsMargins(14, 8, 14, 8)
+        caixa.setSpacing(16)
+        caixa.addWidget(rotulo(titulo, "secao"))
+        valor = rotulo("—", "valor")
+        detalhe = rotulo("")
+        caixa.addWidget(valor)
+        caixa.addWidget(detalhe)
+        self.paineis_cotacao[par] = valor, detalhe
+        self.exibir_cotacoes()
+        return cartao
 
     def dados_origem(self):
         janela = QDialog(self)
@@ -255,6 +383,7 @@ class Janela(QMainWindow):
 
     def atualizar(self):
         indice = max(0, self.abas.currentIndex())
+        self.paineis_cotacao.clear()
         while self.abas.count():
             aba = self.abas.widget(0)
             self.abas.removeTab(0)
@@ -359,43 +488,17 @@ class Janela(QMainWindow):
         caixa.addWidget(botao("Salvar metas", lambda: self.salvar(gravar_metas), True))
         graficos.addWidget(metas, 1)
         corpo.addLayout(graficos)
-        evolucao, vista = grafico("Evolução mensal em reais")
         meses = self.banco.execute("SELECT mes, patrimonio, aporte_total FROM mensal ORDER BY mes").fetchall()
-        if not meses:
-            evolucao.setTitle("Evolução mensal · sem fechamentos")
-        for coluna, nome, cor in ((1, "Patrimônio", AMBAR), (2, "Aporte acumulado", "#a78357")):
-            serie = QLineSeries()
-            serie.setName(nome)
-            serie.setColor(QColor(cor))
-            serie.setPointsVisible(True)
-            for i, linha in enumerate(meses):
-                serie.append(i, linha[coluna])
-            evolucao.addSeries(serie)
-        if meses:
-            from PySide6.QtCharts import QCategoryAxis
-
-            eixo = QCategoryAxis()
-            eixo.setLabelsPosition(QCategoryAxis.AxisLabelsPosition.AxisLabelsPositionOnValue)
-            eixo.setStartValue(-1)
-            passo = max(1, len(meses) // 6)
-            for i, linha in enumerate(meses):
-                if i % passo == 0 or i == len(meses) - 1:
-                    eixo.append(linha[0][5:] + "/" + linha[0][2:4], i)
-            eixo.setRange(-0.18, max(1, len(meses) - 0.82))
-            reais = QValueAxis()
-            reais.setRange(0, max(1, max(max(m[1:]) for m in meses) * 1.1))
-            reais.setLabelFormat("%.0f")
-            evolucao.addAxis(eixo, Qt.AlignmentFlag.AlignBottom)
-            evolucao.addAxis(reais, Qt.AlignmentFlag.AlignLeft)
-            for serie in evolucao.series():
-                serie.attachAxis(eixo)
-                serie.attachAxis(reais)
-        corpo.addWidget(vista)
         corpo.addWidget(tabela(
             ("Classe", "Aportado", "Patrimônio", "Valorização", "Proventos"),
             [(classe, moeda(a), moeda(p), moeda(p - a if p is not None else None), moeda(d))
              for classe, (a, p, d) in zip(CLASSES, dados)],
+            compacta=True,
         ))
+        corpo.addWidget(grafico_linhas("Evolução mensal em reais", [mes for mes, _, _ in meses], [
+            ("Patrimônio", AMBAR, [patrimonio for _, patrimonio, _ in meses]),
+            ("Aporte acumulado", CORES[0], [aporte for _, _, aporte in meses]),
+        ]))
         return rolavel(pagina)
 
     def mensal(self):
@@ -409,12 +512,25 @@ class Janela(QMainWindow):
         dados = self.banco.execute("SELECT * FROM mensal ORDER BY mes DESC").fetchall()
         corpo.addWidget(tabela(
             ("Mês", "Aporte mensal", "Aporte total", "Patrimônio final", "Rendimento do mês",
-             "Valorização", "Rendimento total", "Dividendo mensal", "Dividendo total"),
+             "Valorização", "Rendimento total", "Div. mensal", "Div. total"),
             [(mes[5:] + "/" + mes[:4], moeda(am), moeda(at), moeda(p), moeda(gm),
               f"{numero(pc * 100)}%" if pc is not None else "—", moeda(gt), moeda(dm), moeda(dt))
              for mes, am, at, p, gm, pc, gt, dm, dt in dados],
+            compacta=True,
         ))
-        return pagina
+        dados.reverse()
+        meses = [linha[0] for linha in dados]
+        graficos = QGridLayout()
+        for i, (coluna, titulo, cor) in enumerate((
+            (1, "Aporte mensal", CORES[0]), (4, "Rendimento do mês", AMBAR),
+            (6, "Rendimento total", CORES[1]), (8, "Dividendo total", CORES[3]),
+        )):
+            graficos.addWidget(grafico_linhas(titulo, meses, [
+                (titulo, cor, [linha[coluna] for linha in dados]),
+            ]), i // 2, i % 2)
+        corpo.addLayout(graficos)
+        corpo.addStretch()
+        return rolavel(pagina)
 
     def dialogo_fechamento(self):
         mes = QDate.currentDate().toString("yyyy-MM")
@@ -443,42 +559,47 @@ class Janela(QMainWindow):
             linha.addWidget(botao("Informar patrimônio", lambda: self.editar_parametro("Saldo renda fixa", "Patrimônio (R$)")))
         else:
             linha.addWidget(botao("Atualizar cotação", lambda: self.cotacao(classe)))
-        if classe in ("FIIs", "Ações", "ETFs"):
+        if classe in CLASSES_COM_METAS:
             linha.addWidget(botao("Dividendos", lambda: self.dividendos(classe)))
         if exterior:
             linha.addWidget(botao("+ Remessa", lambda: self.aporte(classe)))
             linha.addWidget(botao("Informar câmbio", lambda: self.editar_parametro("USD/BRL", "Câmbio atual (R$/US$)", 6)))
         corpo.addLayout(linha)
+        if exterior:
+            corpo.addWidget(self.painel_cotacao("USDBRL", "Dólar comercial · USD/BRL"),
+                            alignment=Qt.AlignmentFlag.AlignLeft)
+        elif classe == "Cripto":
+            corpo.addWidget(self.painel_cotacao("BTCBRL", "Bitcoin · BTC/BRL"),
+                            alignment=Qt.AlignmentFlag.AlignLeft)
         corpo.addWidget(rotulo(f"Aportado {moeda(aporte)}    ·    Patrimônio {moeda(patrimonio)}    ·    Proventos {moeda(proventos)}", "secao"))
 
-        graficos = QHBoxLayout()
-        if classe in ("FIIs", "Ações", "ETFs"):
+        if classe in CLASSES_COM_METAS:
+            graficos = QHBoxLayout()
             base = QColor(cor)
-            graficos.addWidget(rosca(f"Distribuição · {classe}", [
-                (ativo, qtd * preco if preco is not None else None,
-                 base.lighter(76 + 14 * (i % 6)).name(),
+            cores = {ativo: base.lighter(76 + 14 * (i % 6)).name()
+                     for i, (ativo, *_resto) in enumerate(pos)}
+            graficos.addWidget(rosca("Alocação atual", [
+                (ativo, qtd * preco if preco is not None else None, cores[ativo],
                  f"{quantidade(qtd)} unidades · {moeda(qtd * preco, simbolo)}" if preco is not None else "")
-                for i, (ativo, qtd, _, preco) in enumerate(pos)
+                for ativo, qtd, _, preco in pos
             ]), 1)
-        barras = QVBoxLayout()
-        historico = dict(self.banco.execute(
-            "SELECT mes, ganho_mes FROM mensal_classe WHERE classe=? ORDER BY mes", (classe,)
-        ))
-        aportes = aportes_por_mes(self.banco, classe)
-        meses = sorted(historico.keys() | aportes.keys())
-        if meses:
-            meses = intervalo_meses(meses[0], meses[-1])[-12:]
-        barras.addWidget(grafico_barras("Rendimento do mês", [(mes, historico.get(mes)) for mes in meses], cor))
-        barras.addWidget(grafico_barras("Aporte mensal", [(mes, aportes.get(mes, 0)) for mes in meses], cor))
-        graficos.addLayout(barras, 2)
-        corpo.addLayout(graficos)
+            graficos.addWidget(rosca("Alocação desejada", [
+                (ativo, parametro(self.banco, f"Meta de ativo · {classe} · {ativo}"), cores[ativo], "")
+                for ativo, *_resto in pos
+            ]), 1)
+            corpo.addLayout(graficos)
+            if pos:
+                corpo.addWidget(botao("Editar alocação desejada", lambda: self.editar_metas_ativos(classe, pos)),
+                                alignment=Qt.AlignmentFlag.AlignRight)
 
         if pos:
             corpo.addWidget(rotulo("Meus ativos", "secao"))
             grade = QGridLayout()
             for i, registro in enumerate(pos):
-                grade.addWidget(self.cartao_ativo(classe, registro), i // 3, i % 3)
-                grade.setColumnStretch(i % 3, 1)
+                grade.addWidget(self.cartao_ativo(classe, registro), i // 3, i % 3,
+                                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            for coluna in range(3):
+                grade.setColumnStretch(coluna, 1)
             corpo.addLayout(grade)
         elif not fixa:
             corpo.addWidget(rotulo("Cadastre seu primeiro ativo em + Novo ativo."))
@@ -490,8 +611,35 @@ class Janela(QMainWindow):
             for dia, reais, dolares in aportes:
                 detalhe = f"{moeda(reais)} → {moeda(dolares, 'US$')}" if exterior else moeda(reais)
                 corpo.addWidget(registro_visual(data_br(dia), detalhe))
+        historico = dict(self.banco.execute(
+            "SELECT mes, ganho_mes FROM mensal_classe WHERE classe=? ORDER BY mes", (classe,)
+        ))
+        aportes = aportes_por_mes(self.banco, classe)
+        meses = sorted(historico.keys() | aportes.keys())
+        if meses:
+            meses = intervalo_meses(meses[0], meses[-1])[-12:]
+        corpo.addWidget(grafico_barras("Rendimento do mês", [(mes, historico.get(mes)) for mes in meses], cor))
+        titulo_aporte = "Aporte mensal · Remessas em reais" if exterior else "Aporte mensal"
+        corpo.addWidget(grafico_barras(titulo_aporte, [(mes, aportes.get(mes, 0)) for mes in meses], cor))
         corpo.addStretch()
         return rolavel(pagina)
+
+    def editar_metas_ativos(self, classe, pos):
+        campos = {}
+        for ativo, *_resto in pos:
+            chave = f"Meta de ativo · {classe} · {ativo}"
+            campo = campo_numero(parametro(self.banco, chave))
+            campo.setMaximum(100)
+            campo.setSuffix(" %")
+            campos[chave] = ativo, campo
+
+        def gravar():
+            valores = [(chave, campo.value()) for chave, (_, campo) in campos.items()]
+            if sum(round(valor * 100) for _, valor in valores) != 10000:
+                raise ValueError("A soma das metas precisa ser de 100%.")
+            self.banco.executemany("INSERT OR REPLACE INTO parametros VALUES (?, ?)", valores)
+
+        self.formulario("Alocação desejada · " + classe, list(campos.values()), gravar)
 
     def cartao_ativo(self, classe, registro):
         ativo, qtd, custo, preco = registro
@@ -499,29 +647,41 @@ class Janela(QMainWindow):
         patrimonio = qtd * preco if preco is not None else None
         cartao = QWidget(objectName="cartao")
         caixa = QVBoxLayout(cartao)
-        caixa.setContentsMargins(16, 14, 16, 14)
+        caixa.setContentsMargins(12, 8, 12, 10)
+        caixa.setSpacing(4)
         faixa = QHBoxLayout()
         nome = rotulo(ativo, "secao")
         nome.setStyleSheet(f"color: {CLASSE_COR[classe]};")
         faixa.addWidget(nome, 1)
         mais = botao("+", lambda: self.compra(classe, ativo, preco))
+        mais.setProperty("tipo", "compacto")
         mais.setToolTip("Adicionar aporte")
         faixa.addWidget(mais)
         detalhes = botao("…", lambda: self.historico_ativo(classe, ativo))
+        detalhes.setProperty("tipo", "compacto")
         detalhes.setToolTip("Informações completas do ativo")
         faixa.addWidget(detalhes)
         caixa.addLayout(faixa)
-        caixa.addWidget(rotulo(moeda(patrimonio, simbolo), "valor"))
+        saldo = rotulo(moeda(patrimonio, simbolo), "valor")
+        saldo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        saldo.setToolTip("Patrimônio atual")
+        caixa.addWidget(saldo)
         grade = QFormLayout()
+        grade.setVerticalSpacing(2)
+        grade.setHorizontalSpacing(16)
         for legenda, valor in (
             ("Quantidade", quantidade(qtd)), ("Preço médio", moeda(custo / qtd if qtd else None, simbolo)),
             ("Preço atual", moeda(preco, simbolo)), ("Total aportado", moeda(custo, simbolo)),
             ("Rendimento total", moeda(patrimonio - custo if patrimonio is not None else None, simbolo)),
         ):
-            grade.addRow(rotulo(legenda), rotulo(valor, "dado"))
+            dado = rotulo(valor, "dado")
+            dado.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            grade.addRow(rotulo(legenda), dado)
         caixa.addLayout(grade)
-        if classe in ("FIIs", "Ações", "ETFs"):
-            caixa.addWidget(botao("Dividendos", lambda: self.dividendos(classe, ativo)))
+        if classe in CLASSES_COM_METAS:
+            dividendos = botao("Dividendos", lambda: self.dividendos(classe, ativo))
+            dividendos.setProperty("tipo", "compacto")
+            caixa.addWidget(dividendos, alignment=Qt.AlignmentFlag.AlignHCenter)
         return cartao
 
     def historico_ativo(self, classe, ativo):
@@ -714,15 +874,32 @@ class Janela(QMainWindow):
 def main():
     QLocale.setDefault(QLocale("pt_BR"))
     app = QApplication([])
+    app.setApplicationName("Profits")
+    pasta_dados = PASTA / "dados"
+    executavel = getattr(sys, "frozen", False)
+    if executavel:
+        pasta_dados = Path(QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.AppLocalDataLocation
+        ))
+        app.setWindowIcon(QIcon(str(PASTA / "moeda.png")))
     app.setStyle("Fusion")
     app.setStyleSheet(TEMA)
-    banco = abrir_banco(PASTA / "dados" / "carteira.sqlite")
+    caminho_banco = pasta_dados / "carteira.sqlite"
+    primeiro_acesso = not caminho_banco.exists()
+    banco = abrir_banco(caminho_banco)
     try:
-        carregar_planilha_inicial(banco, PASTA / "Profits.xlsx")
+        if executavel and primeiro_acesso:
+            origem = sqlite3.connect((PASTA / "carteira-inicial.sqlite").as_uri() + "?mode=ro", uri=True)
+            try:
+                origem.backup(banco)
+            finally:
+                origem.close()
+        elif not executavel:
+            carregar_planilha_inicial(banco, PASTA / "Profits.xlsx")
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as erro:
         QMessageBox.warning(None, "Histórico da planilha", f"Falha ao carregar o histórico local.\n{erro}")
     janela = Janela(banco)
-    janela.show()
+    janela.showMaximized()
     return app.exec()
 
 
