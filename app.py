@@ -413,7 +413,7 @@ class Janela(QMainWindow):
 
 
 def main():
-    QLocale.setDefault(QLocale(QLocale.Language.Portuguese, QLocale.Territory.Brazil))
+    QLocale.setDefault(QLocale("pt_BR"))
     app = QApplication([])
     app.setStyle("Fusion")
     app.setStyleSheet(TEMA)
