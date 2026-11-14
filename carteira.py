@@ -34,7 +34,19 @@ def abrir_banco(caminho):
             patrimonio REAL, ganho_mes REAL, percentual REAL,
             ganho_total REAL, provento_mes REAL, provento_total REAL
         );
+        CREATE TABLE IF NOT EXISTS mensal_classe (
+            classe TEXT, mes TEXT, aporte_total REAL, patrimonio REAL,
+            ganho_mes REAL, ganho_total REAL, percentual REAL,
+            PRIMARY KEY (classe, mes)
+        );
+        CREATE TABLE IF NOT EXISTS origem_planilha (
+            aba TEXT, celula TEXT, valor TEXT,
+            PRIMARY KEY (aba, celula)
+        );
     """)
+    if "cotacao_registrada" not in {linha[1] for linha in banco.execute("PRAGMA table_info(compras)")}:
+        with banco:
+            banco.execute("ALTER TABLE compras ADD COLUMN cotacao_registrada REAL")
     return banco
 
 
@@ -93,6 +105,61 @@ def fechar_mes(banco, mes):
         mes, aporte - anterior[0], aporte, patrimonio, ganho_mes,
         ganho_mes / aporte if aporte else None, ganho_total, provento - anterior[2], provento,
     ))
+    for classe, (aporte, patrimonio, _) in zip(CLASSES, dados):
+        ganho = patrimonio - aporte
+        anterior = banco.execute(
+            "SELECT mes, ganho_total FROM mensal_classe WHERE classe=? AND mes<? ORDER BY mes DESC LIMIT 1",
+            (classe, mes),
+        ).fetchone()
+        mes_anterior = (datetime.fromisoformat(mes + "-01").date().toordinal() - 1)
+        consecutivo = anterior and anterior[0] == datetime.fromordinal(mes_anterior).strftime("%Y-%m")
+        variacao = ganho - anterior[1] if consecutivo else None
+        banco.execute("INSERT INTO mensal_classe VALUES (?, ?, ?, ?, ?, ?, ?)",
+                      (classe, mes, aporte, patrimonio, variacao, ganho, ganho / aporte if aporte else None))
+
+
+def mes_planilha(rotulo):
+    meses = "JAN FEV MAR ABR MAI JUN JUL AGO SET OUT NOV DEZ".split()
+    sigla, ano = re.fullmatch(r"([A-Z]{3})\s*\((\d{4})\)", rotulo.strip()).groups()
+    return f"{ano}-{meses.index('OUT' if sigla == 'OTT' else sigla) + 1:02d}"
+
+
+def carregar_planilha_inicial(banco, arquivo):
+    if not arquivo.is_file() or parametro(banco, "Planilha local carregada"):
+        return
+    from openpyxl import load_workbook
+
+    livro = load_workbook(arquivo, data_only=True)
+    try:
+        with banco:
+            tabelas = ("compras", "aportes", "proventos", "mensal", "cotacoes")
+            if not any(banco.execute(f"SELECT 1 FROM {tabela} LIMIT 1").fetchone() for tabela in tabelas):
+                importar_abas(banco, livro)
+            for classe, aba, coluna in zip(CLASSES, ("RENDA FIXA", "FII", "AÇÕES", "CRIPTO", "ETF"), (11, 24, 33, 19, 38)):
+                for rotulo, aporte, patrimonio, ganho, *resto in livro[aba].iter_rows(
+                    min_row=2, min_col=coluna, max_col=coluna + (4 if coluna == 11 else 5), values_only=True
+                ):
+                    if rotulo is not None:
+                        percentual, total = resto if len(resto) == 2 else (None, resto[0])
+                        banco.execute("INSERT OR IGNORE INTO mensal_classe VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                      (classe, mes_planilha(rotulo), aporte, patrimonio, ganho, total, percentual))
+            # Preserva os valores das células auxiliares que não têm um campo na carteira.
+            banco.executemany("INSERT OR IGNORE INTO origem_planilha VALUES (?, ?, ?)", (
+                (aba.title, celula.coordinate, str(celula.value))
+                for aba in livro for linha in aba.iter_rows()
+                for celula in linha if celula.value is not None
+            ))
+            banco.execute("INSERT OR REPLACE INTO parametros VALUES (?, 1)", ("Planilha local carregada",))
+    finally:
+        livro.close()
+
+
+def aportes_por_mes(banco, classe):
+    tabela, campo = ("aportes", "reais") if classe in ("Renda fixa", "ETFs") else ("compras", "custo")
+    return dict(banco.execute(
+        f"SELECT substr(dia, 1, 7), SUM({campo}) FROM {tabela} WHERE classe=? GROUP BY 1",
+        (classe,),
+    ))
 
 
 def importar(banco, arquivo):
@@ -120,8 +187,8 @@ def importar_abas(banco, livro):
         for linha in planilha.iter_rows(min_row=2, values_only=True):
             dia, ativo, preco, qtd, custo = (linha[i - 1] for i in colunas)
             if isinstance(dia, datetime):
-                banco.execute("INSERT INTO compras VALUES (?, ?, ?, ?, ?, ?)",
-                              (classe, dia.date().isoformat(), ativo, qtd, preco, custo))
+                banco.execute("INSERT INTO compras (classe, dia, ativo, preco, quantidade, custo) VALUES (?, ?, ?, ?, ?, ?)",
+                              (classe, dia.date().isoformat(), ativo, preco, qtd, custo))
             ticker, valor = (linha[i - 1] for i in cotacao)
             if isinstance(ticker, str) and isinstance(valor, (int, float)):
                 if classe == "ETFs":
@@ -142,10 +209,7 @@ def importar_abas(banco, livro):
         ("Saldo renda fixa", livro["RENDA FIXA"]["G2"].value),
         ("USD/BRL", livro["ETF"]["O2"].value),
     ])
-    meses = "JAN FEV MAR ABR MAI JUN JUL AGO SET OUT NOV DEZ".split()
     for rotulo, *valores in livro["MENSAL"].iter_rows(min_row=2, max_col=9, values_only=True):
         if rotulo is None:
             continue
-        sigla, ano = re.fullmatch(r"([A-Z]{3})\s*\((\d{4})\)", rotulo.strip()).groups()
-        mes = meses.index("OUT" if sigla == "OTT" else sigla) + 1
-        banco.execute("INSERT INTO mensal VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (f"{ano}-{mes:02d}", *valores))
+        banco.execute("INSERT INTO mensal VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (mes_planilha(rotulo), *valores))
