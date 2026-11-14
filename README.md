@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/PySide6-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="PySide6"/>
   <img src="https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite"/>
   <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge" alt="Windows"/>
-  <img src="https://img.shields.io/badge/vers%C3%A3o-0.1.0-informational?style=for-the-badge" alt="Versão 0.1.0"/>
+  <img src="https://img.shields.io/badge/status-em_desenvolvimento-E2AD67?style=for-the-badge" alt="Em desenvolvimento"/>
 </p>
 
 <p align="center">
@@ -16,6 +16,7 @@
 <p align="center">
   <a href="#-visão-geral">Visão geral</a> •
   <a href="#-funcionalidades">Funcionalidades</a> •
+  <a href="#-como-usar">Como usar</a> •
   <a href="#-arquitetura">Arquitetura</a> •
   <a href="#-modelo-de-dados">Modelo de dados</a> •
   <a href="#-desenvolvimento">Desenvolvimento</a>
@@ -31,17 +32,29 @@ da alocação e do crescimento mensal.
 
 | ❌ Problema | 💡 Solução | ✅ Resultado |
 |---|---|---|
-| Cada compra exige uma nova linha e ajustes em quadros auxiliares. | Formulário **+ Compra** para ativos existentes e novos. | Posição e preço médio são calculados pelos lançamentos. |
-| O patrimônio e a evolução ficam distribuídos entre abas. | Painel geral e aba de fechamentos mensais. | Alocação por classe e série histórica ficam disponíveis no aplicativo. |
+| Um ativo novo exige ajustar fórmulas e gráficos. | **+ Novo ativo** cadastra o código e salva o primeiro aporte num único formulário. | O cartão aparece na aba e a posição passa a compor o patrimônio e a alocação. |
+| O patrimônio e a evolução ficam distribuídos entre abas. | Roscas de carteira atual e desejada lado a lado, com metas editáveis. | A comparação usa as mesmas cores em ambas as roscas. |
+| Aportes e dividendos ficam espalhados em tabelas. | Cartões de ativos, histórico por código e janela de dividendos com filtros. | Quantidade, cotação, valor aportado e rendimento ficam juntos. |
 | ETFs envolvem aportes e compras em moedas diferentes. | Registro separado das remessas em reais e das compras em dólares. | O saldo em dólares entra na avaliação consolidada em reais. |
 
 ## 📊 Funcionalidades
 
-- **Geral** mostra patrimônio, aporte acumulado, valorização e proventos, com gráficos de alocação e evolução mensal.
+- **Geral** mostra patrimônio, aporte acumulado, valorização e proventos. As fatias exibem o percentual e o valor ao passar o mouse.
 - **Mensal** reúne os nove campos do fechamento, incluindo patrimônio final, rendimento e dividendos.
-- **FIIs, ações, cripto e ETFs** têm registro de compras, posição por ativo, preço médio e cotação.
+- **FIIs, ações e ETFs** têm roscas de distribuição por ativo e uma janela de dividendos com totais, gráfico mensal e pagamentos por data.
+- **Abas de investimento** mostram barras de rendimento do mês e aporte mensal. O rendimento depende dos fechamentos disponíveis. Em ETFs, o aporte mensal em reais representa as remessas.
+- **Cartões** mostram os dados da posição. Use **+** para acrescentar um aporte e **…** para consultar o histórico.
 - **Renda fixa** registra aportes e usa o saldo informado pelo usuário para avaliar o patrimônio.
-- **Importação inicial** traz os lançamentos e fechamentos da planilha no formato Profits para o armazenamento local.
+- **Tema Índigo e Âmbar** usa âmbar no Geral, azul glacial em renda fixa, lavanda em FIIs, coral em ações, jade em cripto e malva em ETFs.
+
+## 🚀 Como usar
+
+1. Abra **Abrir Profits.bat** no Windows com Python instalado.
+2. Na aba da classe, use **+ Novo ativo** para registrar o código, a data, a quantidade, o total pago e a cotação atual por unidade. Informe compras de ETFs em dólares.
+3. No **Geral**, preencha os percentuais desejados e salve quando somarem 100%.
+4. Na aba **Mensal**, salve o fechamento ao final do mês com os saldos e cotações atualizados.
+
+Se uma planilha **Profits.xlsx** no formato original estiver na pasta do aplicativo, o Profits carrega os lançamentos ao iniciar uma carteira vazia. Em uma carteira existente, acrescenta os fechamentos históricos por classe e preserva os lançamentos salvos. A janela **Dados de origem** permite consultar os valores das células, incluindo campos auxiliares.
 
 <details>
 <summary>Como o fechamento mensal funciona</summary>
@@ -79,6 +92,8 @@ flowchart LR
 | Proventos | Classe, data, ativo e valor recebido. |
 | Cotações e parâmetros | Último preço informado por ativo, câmbio e saldo de renda fixa. |
 | Fechamentos | Totais mensais de aportes, patrimônio, rendimento e proventos. |
+| Metas | Percentual desejado para cada classe. |
+| Dados de origem | Valores da planilha local identificados por aba e célula. |
 
 ## 🛠️ Desenvolvimento
 
