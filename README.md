@@ -65,26 +65,6 @@ Os saldos, ativos de exemplo, lançamentos e cotações das capturas são fictí
 |---|---|
 | ![Cotação do dólar na aba ETFs](docs/imagens/etfs.png) | ![Cotação do Bitcoin na aba Cripto](docs/imagens/cripto.png) |
 
-## 🚀 Como usar
-
-1. Baixe o [Profits.exe](https://github.com/jcesarmph-ui/Profits/raw/refs/heads/main/downloads/Profits.exe) e abra no Windows de 64 bits. O executável abre maximizado e pode ser copiado para a Área de Trabalho. Para executar a partir do código-fonte, use **Abrir Profits.bat** com Python instalado.
-2. Na aba da classe, use **+ Novo ativo** para registrar o código, a data, a quantidade, o total pago e a cotação atual por unidade. Informe compras de ETFs em dólares.
-3. No **Geral**, preencha os percentuais desejados e salve quando somarem 100%.
-4. Na aba **Mensal**, salve o fechamento ao final do mês com os saldos e cotações atualizados.
-
-O executável de distribuição inicia com uma carteira vazia e salva os registros em `%LOCALAPPDATA%\Profits`. Na versão executada a partir do código-fonte, uma planilha **Profits.xlsx** no formato original pode preencher uma carteira vazia ou acrescentar fechamentos históricos por classe. A janela **Dados de origem** permite consultar os valores importados, incluindo campos auxiliares.
-
-<details>
-<summary>Como o fechamento mensal funciona</summary>
-
-O fechamento guarda os totais da carteira para o mês. O rendimento acumulado é a diferença entre
-o patrimônio e o aporte acumulado. O rendimento do mês é a variação desse resultado desde o fechamento
-anterior. Os proventos têm colunas próprias.
-
-As cotações iniciais vêm dos valores salvos na planilha e podem ser atualizadas manualmente na interface.
-
-</details>
-
 ## 🧩 Arquitetura
 
 ```mermaid
