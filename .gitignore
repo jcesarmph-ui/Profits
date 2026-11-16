@@ -6,3 +6,5 @@ dados/
 .env
 /build/
 /dist/
+*.exe
+/downloads/
