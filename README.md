@@ -162,7 +162,7 @@ Os saldos, ativos de exemplo, lançamentos e cotações das capturas são fictí
 
 ## 🧠 Como as contas são feitas
 
-O patrimônio de cada classe é calculado na hora, a partir dos lançamentos; o fechamento mensal
+O patrimônio de cada classe é calculado em tempo real, a partir dos lançamentos; o fechamento mensal
 só grava o retrato do mês quando todas as informações estão completas.
 
 ```mermaid
