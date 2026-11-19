@@ -162,7 +162,7 @@ Os saldos, ativos de exemplo, lançamentos e cotações das capturas são fictí
 
 ## 🧠 Como as contas são feitas
 
-O patrimônio de cada classe é calculado na hora, a partir dos lançamentos; o fechamento mensal
+O patrimônio de cada classe é calculado em tempo real, a partir dos lançamentos; o fechamento mensal
 só grava o retrato do mês quando todas as informações estão completas.
 
 ```mermaid
@@ -251,7 +251,7 @@ A planilha e o banco ficam só no computador do usuário e nunca vão para o rep
 | Qt Network + AwesomeAPI | Consulta do dólar comercial e do Bitcoin em reais, sem travar a janela. |
 | PyInstaller | Versão para Windows com ícone da moeda e abertura maximizada. |
 | Git e GitHub | Histórico do projeto e pull requests. |
-| Codex (OpenAI) | IA usada como ferramenta de desenvolvimento, com o autor definindo as regras. |
+| Codex (OpenAI) | IA usada como ferramenta de desenvolvimento, com as regras definidas manualmente. |
 
 ## 🗃️ Modelo de dados
 
@@ -335,7 +335,7 @@ As metas, o câmbio e o saldo da renda fixa ficam em `PARAMETROS` (nome → valo
 | 🧱 **Camadas separadas** | Contas e banco em `carteira.py`, sem depender da tela; a interface só mostra e coleta dados. |
 | 🔒 **Dados protegidos** | Planilha, banco e executável ficam fora do Git; as fotos usam carteira fictícia. |
 | 📥 **Migração fiel** | A planilha original só é lida, e as células sem campo próprio ficam guardadas para consulta. |
-| 🤖 **IA como ferramenta** | Desenvolvimento com o Codex (OpenAI): o autor define as regras, revisa e aprova cada etapa. |
+| 🤖 **IA como ferramenta** | Desenvolvimento com o Codex (OpenAI): as regras são definidas manualmente e cada etapa é revisada e aprovada. |
 
 ### 🗺️ Roteiro
 
@@ -395,7 +395,7 @@ A planilha e o banco da carteira ficam no computador do usuário e são ignorado
 | 📥 | Migração de dados de planilha legada, preservando a origem. |
 | 💱 | Regras de negócio com várias moedas e consolidação em reais. |
 | 🎨 | Identidade visual própria, com uma cor por classe de ativo. |
-| 🤖 | Uso de IA (Codex) como ferramenta de desenvolvimento, com o autor no controle das regras. |
+| 🤖 | Uso de IA (Codex) como ferramenta de desenvolvimento, com as regras sob controle manual. |
 
 ---
 
