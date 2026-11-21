@@ -44,7 +44,7 @@ da alocação e do crescimento mensal.
 - **Mensal** reúne a tabela de fechamentos e quatro gráficos de linha para aporte mensal, rendimento do mês, rendimento total e dividendo total.
 - **FIIs, ações e ETFs** comparam a alocação atual e a desejada em roscas lado a lado, com metas editáveis por ativo. A janela de dividendos mostra totais, gráfico mensal e pagamentos por data.
 - **Abas de investimento** exibem os gráficos de aporte e rendimento no fim da página. Rendimentos negativos têm cor própria e os valores aparecem ao passar o mouse. Em ETFs, a série de aportes mostra as remessas em reais.
-- **ETFs e Cripto** consultam automaticamente o dólar comercial e o Bitcoin em reais a cada 30 segundos. Os painéis mostram o horário da fonte. As cotações usadas para avaliar a carteira são informadas na interface. [AwesomeAPI](https://docs.awesomeapi.com.br/api-de-moedas)
+- **Cotações automáticas** para FIIs, ações, ETFs e cripto. Ações, FIIs e ETFs vêm do [Yahoo Finance](https://finance.yahoo.com), sem conta, a cada 5 minutos. A [brapi](https://brapi.dev) e a [Finnhub](https://finnhub.io) ficam como reserva, se houver chaves configuradas. Dólar e Bitcoin vêm da [AwesomeAPI](https://docs.awesomeapi.com.br/api-de-moedas), a cada 30 segundos. Patrimônio, valorização e rendimentos são recalculados a cada consulta. O botão **Atualizar** consulta tudo na hora.
 - **Cartões** mostram os dados da posição. Use **+** para acrescentar um aporte e **…** para consultar o histórico.
 - **Renda fixa** registra aportes e usa o saldo informado pelo usuário para avaliar o patrimônio.
 - **Tema Índigo e Âmbar** usa âmbar no Geral, azul glacial em renda fixa, lavanda em FIIs, coral em ações, jade em cripto e malva em ETFs.
@@ -68,7 +68,7 @@ Os saldos, ativos de exemplo, lançamentos e cotações das capturas são fictí
 ## 🚀 Como usar
 
 1. Baixe o [Profits.exe](https://github.com/jcesarmph-ui/Profits/raw/refs/heads/main/downloads/Profits.exe) e abra no Windows de 64 bits. O executável abre maximizado e pode ser copiado para a Área de Trabalho. Para executar a partir do código-fonte, use **Abrir Profits.bat** com Python instalado.
-2. Na aba da classe, use **+ Novo ativo** para registrar o código, a data, a quantidade, o total pago e a cotação atual por unidade. Informe compras de ETFs em dólares.
+2. Na aba da classe, use **+ Novo ativo** para registrar o código, a data, a quantidade e o total pago. A cotação é consultada sozinha. Informe compras de ETFs em dólares.
 3. No **Geral**, preencha os percentuais desejados e salve quando somarem 100%.
 4. Na aba **Mensal**, salve o fechamento ao final do mês com os saldos e cotações atualizados.
 
@@ -81,7 +81,15 @@ O fechamento guarda os totais da carteira para o mês. O rendimento acumulado é
 o patrimônio e o aporte acumulado. O rendimento do mês é a variação desse resultado desde o fechamento
 anterior. Os proventos têm colunas próprias.
 
-As cotações iniciais vêm dos valores salvos na planilha e podem ser atualizadas manualmente na interface.
+Somente o saldo da renda fixa é informado manualmente, pelo botão **Atualizar valor**. As demais cotações são consultadas automaticamente.
+
+As cotações da B3 e dos ETFs vêm do Yahoo Finance, sem conta nem chave. Se quiser usar a brapi ou a Finnhub como reserva, crie o arquivo `dados/chaves.json` com as chaves gratuitas:
+
+```json
+{"brapi": "SEU_TOKEN_BRAPI", "finnhub": "SUA_CHAVE_FINNHUB"}
+```
+
+A pasta `dados/` não é enviada ao GitHub.
 
 </details>
 

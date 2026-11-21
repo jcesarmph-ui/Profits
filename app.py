@@ -5,12 +5,13 @@ import json
 import math
 import sqlite3
 import sys
+import threading
 
 from PySide6.QtCharts import (
     QBarCategoryAxis, QBarSet, QCategoryAxis, QChart, QChartView, QLineSeries,
     QPieSeries, QStackedBarSeries, QValueAxis,
 )
-from PySide6.QtCore import QDate, QDateTime, QLocale, QStandardPaths, Qt, QTimer, QUrl
+from PySide6.QtCore import QDate, QDateTime, QEvent, QLocale, QObject, QStandardPaths, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QCursor, QIcon, QPainter
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -23,8 +24,10 @@ from PySide6.QtWidgets import (
 from carteira import (
     CLASSES, abrir_banco, aportes_por_mes, carregar_planilha_inicial, fechar_mes, parametro, posicoes, totais,
 )
+from mercado import carregar_chaves, cotacoes_b3, cotacoes_eua, cotacoes_yahoo
 
 PASTA = Path(__file__).resolve().parent
+INTERVALO_MERCADO_MS = 5 * 60 * 1000  # brapi e Finnhub têm cota; o câmbio e o Bitcoin seguem a cada 30 s
 AMBAR = "#e2ad67"
 CORES = ("#7ebdd2", "#a4afe7", "#e59391", "#83b9aa", "#c09bcd")
 CLASSE_COR = dict(zip(CLASSES, CORES))
@@ -170,12 +173,30 @@ def registro_visual(titulo, detalhe):
     return cartao
 
 
-def mostrar_fatia(fatia, mensagem, dentro):
-    fatia.setExploded(dentro)
-    if dentro:
-        QToolTip.showText(QCursor.pos(), mensagem)
-    else:
-        QToolTip.hideText()
+class DicaFixa(QObject):
+    """Mantém a dica da fatia visível enquanto o mouse se move dentro da rosca.
+
+    O Qt esconde a dica ao primeiro movimento; por isso ela é exibida de novo a cada movimento.
+    """
+
+    def __init__(self, vista):
+        super().__init__(vista)
+        self.vista = vista
+        self.texto = None
+        vista.setMouseTracking(True)
+        vista.installEventFilter(self)
+
+    def mostrar(self, texto):
+        self.texto = texto
+        if texto:
+            QToolTip.showText(QCursor.pos(), texto, self.vista)
+        else:
+            QToolTip.hideText()
+
+    def eventFilter(self, objeto, evento):
+        if evento.type() == QEvent.Type.MouseMove and self.texto:
+            QToolTip.showText(QCursor.pos(), self.texto, self.vista)
+        return False
 
 
 def rosca(titulo, dados):
@@ -196,10 +217,12 @@ def rosca(titulo, dados):
     chart.legend().setVisible(0 < len(detalhes) <= 8)
     if not detalhes:
         chart.setTitle(f"{titulo} · Sem dados")
+    dica = DicaFixa(vista)
     for fatia, resumo in detalhes:
         fatia.setLabel(f"{fatia.label()} · {numero(fatia.percentage() * 100, 1)}%")
         mensagem = f"{fatia.label()} · {resumo}" if resumo else fatia.label()
-        fatia.hovered.connect(lambda dentro, item=fatia, texto=mensagem: mostrar_fatia(item, texto, dentro))
+        fatia.hovered.connect(lambda dentro, item=fatia, texto=mensagem: (
+            item.setExploded(dentro), dica.mostrar(texto if dentro else None)))
     return vista
 
 
@@ -291,6 +314,12 @@ def grafico_barras(titulo, dados, cor, simbolo="R$"):
     return vista
 
 
+class Sinal(QObject):
+    """Leva o resultado das consultas da thread de rede para a interface."""
+
+    recebido = Signal(dict)
+
+
 class Janela(QMainWindow):
     def __init__(self, banco):
         super().__init__()
@@ -299,6 +328,10 @@ class Janela(QMainWindow):
         self.cotacoes_ao_vivo = {}
         self.paineis_cotacao = {}
         self.falha_cotacao = False
+        self.consultas_pendentes = 0
+        self.atualizar_depois = False
+        self.sinal = Sinal(self)
+        self.sinal.recebido.connect(self.receber_mercado)
         self.setWindowTitle("Profits")
         self.resize(1250, 790)
         raiz = QWidget()
@@ -317,16 +350,79 @@ class Janela(QMainWindow):
         self.timer_cotacoes = QTimer(self)
         self.timer_cotacoes.timeout.connect(self.buscar_cotacoes)
         self.timer_cotacoes.start(30_000)
-        QTimer.singleShot(0, self.buscar_cotacoes)
+        self.timer_mercado = QTimer(self)
+        self.timer_mercado.timeout.connect(self.buscar_mercado)
+        self.timer_mercado.start(INTERVALO_MERCADO_MS)
+        QTimer.singleShot(0, self.atualizar_cotacoes)
+
+    def atualizar_cotacoes(self):
+        """Botão Atualizar: consulta todas as cotações e redesenha a página com os valores novos."""
+        self.atualizar_depois = True
+        self.buscar_cotacoes()
+        self.buscar_mercado()
+
+    def concluir_consulta(self, mudou):
+        self.consultas_pendentes -= 1
+        if mudou or (self.atualizar_depois and self.consultas_pendentes == 0):
+            self.atualizar_depois = False
+            self.atualizar()
 
     def buscar_cotacoes(self):
         url = "https://economia.awesomeapi.com.br/json/last/USD-BRL,BTC-BRL"
         pedido = QNetworkRequest(QUrl(url))
         pedido.setTransferTimeout(8_000)
+        self.consultas_pendentes += 1
         resposta = self.rede.get(pedido)
         resposta.finished.connect(lambda: self.receber_cotacoes(resposta))
 
+    def buscar_mercado(self):
+        """Consulta B3 e ETFs dos EUA numa thread, para não travar a janela."""
+        try:
+            chaves = carregar_chaves(PASTA / "dados")
+        except (OSError, ValueError):
+            chaves = {}
+        b3 = [codigo for codigo, in self.banco.execute(
+            "SELECT DISTINCT ativo FROM compras WHERE classe IN ('FIIs', 'Ações')")]
+        eua = [codigo for codigo, in self.banco.execute("SELECT DISTINCT ativo FROM compras WHERE classe='ETFs'")]
+
+        def consultar():
+            # Yahoo Finance é a fonte principal (sem conta). brapi e Finnhub só completam o que faltar.
+            precos = {
+                **cotacoes_yahoo(b3, ".SA"),
+                **cotacoes_yahoo(eua),
+            }
+            faltam_b3 = [codigo for codigo in b3 if codigo.upper() not in precos]
+            faltam_eua = [codigo for codigo in eua if codigo.upper() not in precos]
+            precos = {
+                **cotacoes_b3(faltam_b3, chaves.get("brapi")),
+                **cotacoes_eua(faltam_eua, chaves.get("finnhub")),
+                **precos,
+            }
+            self.sinal.recebido.emit({"precos": precos})
+
+        self.consultas_pendentes += 1
+        threading.Thread(target=consultar, daemon=True).start()
+
+    def receber_mercado(self, resultado):
+        mudou = False
+        try:
+            classes = {codigo: classe for classe, codigo in self.banco.execute(
+                "SELECT DISTINCT classe, ativo FROM compras")}
+            atuais = {(classe, codigo): preco for classe, codigo, preco in self.banco.execute(
+                "SELECT classe, ativo, preco FROM cotacoes")}
+            with self.banco:
+                for codigo, preco in resultado["precos"].items():
+                    if codigo not in classes:
+                        continue
+                    chave = classes[codigo], codigo
+                    mudou = mudou or atuais.get(chave) != preco
+                    self.banco.execute("INSERT OR REPLACE INTO cotacoes VALUES (?, ?, ?)", (*chave, preco))
+        except sqlite3.Error:
+            mudou = False
+        self.concluir_consulta(mudou)
+
     def receber_cotacoes(self, resposta):
+        mudou = False
         try:
             dados = json.loads(bytes(resposta.readAll()))
             cotacoes = {}
@@ -337,12 +433,27 @@ class Janela(QMainWindow):
                 data = QDateTime.fromSecsSinceEpoch(int(dados[par]["timestamp"]))
                 cotacoes[par] = (preco, data.toString("dd/MM · HH:mm"))
             self.cotacoes_ao_vivo = cotacoes
+            mudou = self.aplicar_cotacoes(cotacoes)
             self.falha_cotacao = False
-        except (ValueError, KeyError, TypeError, OverflowError):
+        except (ValueError, KeyError, TypeError, OverflowError, sqlite3.Error):
             self.falha_cotacao = True
         finally:
             resposta.deleteLater()
         self.exibir_cotacoes()
+        self.concluir_consulta(mudou)
+
+    def aplicar_cotacoes(self, cotacoes):
+        """Grava o dólar e o Bitcoin ao vivo na avaliação da carteira. Retorna se algum valor mudou."""
+        dolar, _ = cotacoes["USDBRL"]
+        bitcoin, _ = cotacoes["BTCBRL"]
+        antigo_dolar = parametro(self.banco, "USD/BRL", None)
+        antigo_btc = self.banco.execute(
+            "SELECT preco FROM cotacoes WHERE classe='Cripto' AND ativo='BTC'"
+        ).fetchone()
+        with self.banco:
+            self.banco.execute("INSERT OR REPLACE INTO parametros VALUES (?, ?)", ("USD/BRL", dolar))
+            self.banco.execute("INSERT OR REPLACE INTO cotacoes VALUES (?, ?, ?)", ("Cripto", "BTC", bitcoin))
+        return dolar != antigo_dolar or antigo_btc is None or antigo_btc[0] != bitcoin
 
     def exibir_cotacoes(self):
         for par, (valor, detalhe) in self.paineis_cotacao.items():
@@ -556,14 +667,13 @@ class Janela(QMainWindow):
         linha.addWidget(botao("+ Aporte" if fixa else "+ Novo ativo",
                               lambda: self.aporte(classe) if fixa else self.compra(classe), True))
         if fixa:
-            linha.addWidget(botao("Informar patrimônio", lambda: self.editar_parametro("Saldo renda fixa", "Patrimônio (R$)")))
+            linha.addWidget(botao("Atualizar valor", lambda: self.editar_parametro("Saldo renda fixa", "Atualizar valor (R$)")))
         else:
-            linha.addWidget(botao("Atualizar cotação", lambda: self.cotacao(classe)))
+            linha.addWidget(botao("Atualizar", self.atualizar_cotacoes))
         if classe in CLASSES_COM_METAS:
             linha.addWidget(botao("Dividendos", lambda: self.dividendos(classe)))
         if exterior:
             linha.addWidget(botao("+ Remessa", lambda: self.aporte(classe)))
-            linha.addWidget(botao("Informar câmbio", lambda: self.editar_parametro("USD/BRL", "Câmbio atual (R$/US$)", 6)))
         corpo.addLayout(linha)
         if exterior:
             corpo.addWidget(self.painel_cotacao("USDBRL", "Dólar comercial · USD/BRL"),
@@ -578,9 +688,18 @@ class Janela(QMainWindow):
             base = QColor(cor)
             cores = {ativo: base.lighter(76 + 14 * (i % 6)).name()
                      for i, (ativo, *_resto) in enumerate(pos)}
+            dolar = parametro(self.banco, "USD/BRL", None) if exterior else None
+
+            def resumo_atual(qtd, preco):
+                if preco is None:
+                    return ""
+                texto = f"{quantidade(qtd)} unidades · {moeda(qtd * preco, simbolo)}"
+                if dolar:
+                    texto += f" · {moeda(qtd * preco * dolar, 'R$')}"
+                return texto
+
             graficos.addWidget(rosca("Alocação atual", [
-                (ativo, qtd * preco if preco is not None else None, cores[ativo],
-                 f"{quantidade(qtd)} unidades · {moeda(qtd * preco, simbolo)}" if preco is not None else "")
+                (ativo, qtd * preco if preco is not None else None, cores[ativo], resumo_atual(qtd, preco))
                 for ativo, qtd, _, preco in pos
             ]), 1)
             graficos.addWidget(rosca("Alocação desejada", [
@@ -700,7 +819,7 @@ class Janela(QMainWindow):
             lista.addWidget(registro_visual(
                 f"{data_br(dia)}  ·  {moeda(custo, simbolo)}",
                 f"{quantidade(qtd)} unidades · Preço pago por unidade {moeda(preco, simbolo)}\n"
-                f"Cotação informada no aporte {moeda(cotacao, simbolo)}",
+                f"Cotação no momento do aporte {moeda(cotacao, simbolo)}",
             ))
         lista.addStretch()
         corpo.addWidget(rolavel(conteudo))
@@ -711,13 +830,12 @@ class Janela(QMainWindow):
         ativo = QLineEdit(ticker or "")
         ativo.setReadOnly(ticker is not None)
         qtd, custo = campo_numero(casas=8), campo_numero()
-        preco = campo_numero(cotacao, casas=8)
         simbolo = "US$" if classe == "ETFs" else "R$"
 
         def gravar():
             codigo = ativo.text().strip().upper()
-            if not codigo or min(qtd.value(), preco.value(), custo.value()) <= 0:
-                raise ValueError("Informe o código do ativo, a quantidade, o valor total e o preço atual.")
+            if not codigo or min(qtd.value(), custo.value()) <= 0:
+                raise ValueError("Informe o código do ativo, a quantidade e o valor total.")
             if ticker is None and self.banco.execute(
                 "SELECT 1 FROM compras WHERE classe=? AND ativo=? COLLATE NOCASE", (classe, codigo)
             ).fetchone():
@@ -728,14 +846,14 @@ class Janela(QMainWindow):
                 "INSERT INTO compras (classe, dia, ativo, quantidade, preco, custo, cotacao_registrada) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (classe, dia.date().toString("yyyy-MM-dd"), codigo, qtd.value(),
-                 custo.value() / qtd.value(), custo.value(), preco.value()),
+                 custo.value() / qtd.value(), custo.value(), cotacao),
             )
-            self.banco.execute("INSERT OR REPLACE INTO cotacoes VALUES (?, ?, ?)", (classe, codigo, preco.value()))
 
-        self.formulario(f"Adicionar aporte · {ticker}" if ticker else f"Novo ativo · {classe}", [
+        if self.formulario(f"Adicionar aporte · {ticker}" if ticker else f"Novo ativo · {classe}", [
             ("Código do ativo", ativo), ("Data", dia), ("Quantidade", qtd),
-            (f"Valor total do aporte ({simbolo})", custo), (f"Preço atual por unidade ({simbolo})", preco),
-        ], gravar, "Salvar aporte" if ticker else "Criar ativo e salvar aporte")
+            (f"Valor total do aporte ({simbolo})", custo),
+        ], gravar, "Salvar aporte" if ticker else "Criar ativo e salvar aporte"):
+            self.buscar_mercado()
 
     def aporte(self, classe):
         dia, reais, dolares = campo_data(), campo_numero(), campo_numero()
@@ -761,23 +879,6 @@ class Janela(QMainWindow):
             self.banco.execute("INSERT OR REPLACE INTO parametros VALUES (?, ?)", (nome, valor.value()))
 
         self.formulario(legenda, [(legenda, valor)], gravar)
-
-    def cotacao(self, classe):
-        ativo, preco = QComboBox(), campo_numero(casas=6)
-        pos = posicoes(self.banco, classe)
-        if not pos:
-            QMessageBox.information(self, "Cotação", "Registre uma compra para adicionar o ativo à carteira.")
-            return
-        ativo.addItems([a for a, *_ in pos])
-        ativo.currentIndexChanged.connect(lambda i: preco.setValue(pos[i][3] or 0))
-        preco.setValue(pos[0][3] or 0)
-
-        def gravar():
-            if preco.value() <= 0:
-                raise ValueError("Informe uma cotação maior que zero.")
-            self.banco.execute("INSERT OR REPLACE INTO cotacoes VALUES (?, ?, ?)", (classe, ativo.currentText(), preco.value()))
-
-        self.formulario("Informar cotação", [("Ativo", ativo), ("Preço (US$)" if classe == "ETFs" else "Preço (R$)", preco)], gravar)
 
     def dividendos(self, classe, ticker=None):
         janela = QDialog(self)
