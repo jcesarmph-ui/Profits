@@ -35,6 +35,8 @@ AMBAR = "#e2ad67"
 CORES = ("#7ebdd2", "#a4afe7", "#e59391", "#83b9aa", "#c09bcd")
 CLASSE_COR = dict(zip(CLASSES, CORES))
 CLASSES_COM_METAS = ("FIIs", "Ações", "ETFs")
+# Cores das fatias por ativo: as mesmas cores das classes na aba Geral, para ficarem bem distintas.
+PALETA_ATIVOS = (AMBAR, CORES[0], CORES[2], CORES[3], CORES[1], CORES[4])
 TEMA = """
 QWidget { background:#181a2a; color:#eef2fa; font-family:'Segoe UI'; font-size:14px; }
 QLabel[tipo="titulo"] {font-size:27px; font-weight:700;}
@@ -692,8 +694,7 @@ class Janela(QMainWindow):
 
         if classe in CLASSES_COM_METAS:
             graficos = QHBoxLayout()
-            base = QColor(cor)
-            cores = {ativo: base.lighter(76 + 14 * (i % 6)).name()
+            cores = {ativo: PALETA_ATIVOS[i % len(PALETA_ATIVOS)]
                      for i, (ativo, *_resto) in enumerate(pos)}
             dolar = parametro(self.banco, "USD/BRL", None) if exterior else None
 
