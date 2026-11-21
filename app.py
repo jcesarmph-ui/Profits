@@ -26,7 +26,10 @@ from carteira import (
 )
 from mercado import carregar_chaves, cotacoes_b3, cotacoes_eua, cotacoes_yahoo
 
-PASTA = Path(__file__).resolve().parent
+# No executável empacotado, os dados ficam ao lado do .exe; no código-fonte, ao lado do app.py.
+PASTA = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+# Recursos empacotados (ícone e banco inicial) ficam na pasta temporária do PyInstaller.
+RECURSOS = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else PASTA
 INTERVALO_MERCADO_MS = 5 * 60 * 1000  # brapi e Finnhub têm cota; o câmbio e o Bitcoin seguem a cada 30 s
 AMBAR = "#e2ad67"
 CORES = ("#7ebdd2", "#a4afe7", "#e59391", "#83b9aa", "#c09bcd")
@@ -189,13 +192,17 @@ class DicaFixa(QObject):
     def mostrar(self, texto):
         self.texto = texto
         if texto:
-            QToolTip.showText(QCursor.pos(), texto, self.vista)
+            self.exibir()
         else:
             QToolTip.hideText()
 
+    def exibir(self):
+        # O retângulo informa ao Qt a área em que a dica continua válida: ela só some ao sair da rosca.
+        QToolTip.showText(QCursor.pos(), self.texto, self.vista, self.vista.rect())
+
     def eventFilter(self, objeto, evento):
         if evento.type() == QEvent.Type.MouseMove and self.texto:
-            QToolTip.showText(QCursor.pos(), self.texto, self.vista)
+            self.exibir()
         return False
 
 
@@ -982,7 +989,7 @@ def main():
         pasta_dados = Path(QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.AppLocalDataLocation
         ))
-        app.setWindowIcon(QIcon(str(PASTA / "moeda.png")))
+        app.setWindowIcon(QIcon(str(RECURSOS / "moeda.png")))
     app.setStyle("Fusion")
     app.setStyleSheet(TEMA)
     caminho_banco = pasta_dados / "carteira.sqlite"
@@ -990,7 +997,7 @@ def main():
     banco = abrir_banco(caminho_banco)
     try:
         if executavel and primeiro_acesso:
-            origem = sqlite3.connect((PASTA / "carteira-inicial.sqlite").as_uri() + "?mode=ro", uri=True)
+            origem = sqlite3.connect((RECURSOS / "carteira-inicial.sqlite").as_uri() + "?mode=ro", uri=True)
             try:
                 origem.backup(banco)
             finally:
