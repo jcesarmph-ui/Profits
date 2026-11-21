@@ -140,6 +140,7 @@ Os saldos, ativos de exemplo, lançamentos e cotações das capturas são fictí
 - **Mensal** reúne a tabela de fechamentos e quatro gráficos de linha para aporte mensal, rendimento do mês, rendimento total e dividendo total.
 - **FIIs, ações e ETFs** comparam a alocação atual e a desejada em roscas lado a lado, com metas editáveis por ativo. A janela de dividendos mostra totais, gráfico mensal e pagamentos por data.
 - **Abas de investimento** exibem os gráficos de aporte e rendimento no fim da página. Rendimentos negativos têm cor própria e os valores aparecem ao passar o mouse. Em ETFs, a série de aportes mostra as remessas em reais.
+- **FIIs, ações e ETFs** têm cotação atual consultada a cada 5 minutos no [Yahoo Finance](https://finance.yahoo.com), sem conta nem chave. A [brapi](https://brapi.dev) e a [Finnhub](https://finnhub.io) ficam como reserva, se houver chaves em `dados/chaves.json`. Os valores dos ETFs aparecem também em reais, pelo dólar atual.
 - **ETFs e Cripto** consultam automaticamente o dólar comercial e o Bitcoin em reais a cada 30 segundos. Os painéis mostram o horário da fonte. As cotações usadas para avaliar a carteira são informadas na interface. [AwesomeAPI](https://docs.awesomeapi.com.br/api-de-moedas)
 - **Cartões** mostram os dados da posição. Use **+** para acrescentar um aporte e **…** para consultar o histórico.
 - **Renda fixa** registra aportes e usa o saldo informado pelo usuário para avaliar o patrimônio.
@@ -249,6 +250,7 @@ A planilha e o banco ficam só no computador do usuário e nunca vão para o rep
 | SQLite | Armazenamento local dos registros e fechamentos. |
 | openpyxl | Leitura da planilha na importação inicial. |
 | Qt Network + AwesomeAPI | Consulta do dólar comercial e do Bitcoin em reais, sem travar a janela. |
+| Yahoo Finance (`mercado.py`) | Cotações de FIIs, ações e ETFs, sem conta nem chave. |
 | PyInstaller | Versão para Windows com ícone da moeda e abertura maximizada. |
 | Git e GitHub | Histórico do projeto e pull requests. |
 | Codex (OpenAI) | IA usada como ferramenta de desenvolvimento, com as regras definidas manualmente. |
